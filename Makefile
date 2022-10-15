@@ -1,0 +1,3 @@
+test:
+	docker build -t go-enet .
+	docker run --rm go-enet go test -v -test.timeout=2s ./...
