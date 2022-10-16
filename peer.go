@@ -3,7 +3,7 @@ package enet
 // #include <enet/enet.h>
 import "C"
 import (
-	"encoding/binary"
+	"fmt"
 	"unsafe"
 )
 
@@ -19,24 +19,27 @@ type Peer interface {
 	SendString(str string, channel uint8, flags PacketFlags) error
 	SendPacket(packet Packet, channel uint8) error
 
-	// SetDataUint64 set an arbitrary values against a peer. This is useful
+	// SetData set an arbitrary values against a peer. This is useful
 	// to attach some application-specific data against each peer (such as
 	// an identifier).
 	//
-	// Technically enet allows any data to be stored here (void*), but to keep
-	// this type-safe we restrict what can be stored here. New SetDataXXX() methods
-	// could be added in the future if needed, e.g. SetDataString() (string, bool).
-	//
 	// http://enet.bespin.org/structENetPeer.html#a1873959810db7ac7a02da90469ee384e
-	SetDataUint64(i uint64)
+	//
+	// For simplicity, we only allow byte slices up to 255 length. If given a slice
+	// longer than this, we panic. See MaxPeerDataLength.
+	SetData(data []byte)
 
-	// GetDataUint64 returns an application-specific value that's been set
+	// GetData returns an application-specific value that's been set
 	// against this peer. The bool is true if a value has previously been
 	// set.
 	//
 	// http://enet.bespin.org/structENetPeer.html#a1873959810db7ac7a02da90469ee384e
-	GetDataUint64() (uint64, bool)
+	GetData() []byte
 }
+
+// MaxPeerDataLength is the maximum number of bytes we can support being stored
+// alongside a peer. See Peer.SetData.
+const MaxPeerDataLength = 0xff
 
 type enetPeer struct {
 	cPeer *C.struct__ENetPeer
@@ -94,27 +97,32 @@ func (peer enetPeer) SendPacket(packet Packet, channel uint8) error {
 	return nil
 }
 
-func (peer enetPeer) SetDataUint64(i uint64) {
-	b := make([]byte, 9)
-	b[0] = 1
-	binary.LittleEndian.PutUint64(b[1:], i)
+func (peer enetPeer) SetData(data []byte) {
+	if len(data) > MaxPeerDataLength {
+		panic(fmt.Sprintf("cannot store data with len > %d", MaxPeerDataLength))
+	}
 
+	if data == nil {
+		peer.cPeer.data = nil
+		return
+	}
+
+	// First byte is how long our slice is..
+	b := make([]byte, len(data)+1)
+	b[0] = byte(len(data))
+	copy(b[1:], data)
 	peer.cPeer.data = unsafe.Pointer(&b[0])
 }
 
-func (peer enetPeer) GetDataUint64() (uint64, bool) {
-	if unsafe.Pointer(peer.cPeer.data) == nil {
-		return 0, false
+func (peer enetPeer) GetData() []byte {
+	ptr := unsafe.Pointer(peer.cPeer.data)
+
+	if ptr == nil {
+		return nil
 	}
 
-	b := C.GoBytes(
-		unsafe.Pointer(peer.cPeer.data),
-		(C.int)(9),
+	return C.GoBytes(
+		unsafe.Add(ptr, 1),   // Read from the [1] element.
+		C.int(*(*byte)(ptr)), // First byte contains the slice length.
 	)
-
-	if b[0] == 0 {
-		return 0, false
-	}
-
-	return binary.LittleEndian.Uint64(b[1:]), true
 }

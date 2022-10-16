@@ -2,11 +2,12 @@ package enet_test
 
 import (
 	"github.com/vaeryn-uk/go-enet"
+	"runtime"
 	"testing"
 )
 
 func TestPeerData(t *testing.T) {
-	const testData uint64 = 5
+	testData := []byte{0x1, 0x2, 0x3}
 
 	// peer is connected to our server.
 	// events will produce events as the server receives them.
@@ -14,12 +15,13 @@ func TestPeerData(t *testing.T) {
 
 	// Wait for the server to respond with a connection.
 	ev := <-events
-	if data, exists := ev.GetPeer().GetDataUint64(); exists {
-		t.Fatalf("did not expect new peer to have data set, but has %d", data)
+	if data := ev.GetPeer().GetData(); data != nil {
+		t.Fatalf("did not expect new peer to have data set, but has %x", data)
 	}
 
-	// Set some data against our peer.
-	ev.GetPeer().SetDataUint64(testData)
+	// Set some data against our peer and immediately checked it's there.
+	ev.GetPeer().SetData(testData)
+	assertPeerData(t, ev.GetPeer(), testData, "immediate after set")
 
 	// Send a message to the server.
 	if err := peer.SendString("testmessage", 0, enet.PacketFlagReliable); err != nil {
@@ -30,10 +32,39 @@ func TestPeerData(t *testing.T) {
 	// server-side peer associated with this event has the data
 	// we set previously.
 	ev = <-events
-	if data, exists := ev.GetPeer().GetDataUint64(); !exists {
-		t.Fatalf("expected peer to have data set, but it wasn't")
-	} else if data != testData {
-		t.Fatalf("expected peer data to be %d, but it was %d", testData, data)
+	assertPeerData(t, ev.GetPeer(), testData, "on packet received")
+
+	// Now do some extra checks on what we can pass in.
+	ev.GetPeer().SetData(nil)
+	assertPeerData(t, ev.GetPeer(), nil, "nil set")
+
+	// Empty byte slice.
+	ev.GetPeer().SetData([]byte{})
+	assertPeerData(t, ev.GetPeer(), []byte{}, "empty set")
+
+	// Check that our data stored in C survives garbage collection
+	ev.GetPeer().SetData([]byte{1, 2, 3})
+	runtime.GC()
+	assertPeerData(t, ev.GetPeer(), []byte{1, 2, 3}, "after GC")
+
+	// Maximum length.
+	ev.GetPeer().SetData(make([]byte, 0xff))
+	assertPeerData(t, ev.GetPeer(), make([]byte, 0xff), "max length")
+}
+
+func assertPeerData(t testing.TB, peer enet.Peer, expected []byte, msg string) {
+	actual := peer.GetData()
+
+	if (actual == nil) != (expected == nil) {
+		t.Fatalf("%s: expected peer data to be present? %t vs actual: %t", msg, expected != nil, actual != nil)
+	}
+
+	if len(actual) != len(expected) {
+		t.Fatalf("%s: expected peer data to have len %d vs actual %d", msg, len(expected), len(actual))
+	}
+
+	if string(actual) != string(expected) {
+		t.Fatalf("%s: expected peer data to be %v, but it was %v", msg, expected, actual)
 	}
 }
 
