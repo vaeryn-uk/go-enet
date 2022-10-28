@@ -1,7 +1,7 @@
 package enet_test
 
 import (
-	"github.com/vaeryn-uk/go-enet"
+	"github.com/codecat/go-enet"
 	"runtime"
 	"testing"
 )

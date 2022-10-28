@@ -1,3 +1,3 @@
-module github.com/vaeryn-uk/go-enet
+module github.com/codecat/go-enet
 
 go 1.19

@@ -2,7 +2,7 @@ package enet_test
 
 import (
 	"fmt"
-	"github.com/vaeryn-uk/go-enet"
+	"github.com/codecat/go-enet"
 	"log"
 )
 
