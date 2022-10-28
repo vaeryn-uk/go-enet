@@ -19,7 +19,7 @@ func TestPeerData(t *testing.T) {
 		t.Fatalf("did not expect new peer to have data set, but has %x", data)
 	}
 
-	// Set some data against our peer and immediately checked it's there.
+	// Set some data against our peer and immediately check it's there.
 	ev.GetPeer().SetData(testData)
 	assertPeerData(t, ev.GetPeer(), testData, "immediate after set")
 
@@ -50,6 +50,14 @@ func TestPeerData(t *testing.T) {
 	// Maximum length.
 	ev.GetPeer().SetData(make([]byte, 0xff))
 	assertPeerData(t, ev.GetPeer(), make([]byte, 0xff), "max length")
+
+	// Finally check that anything longer than max panics.
+	defer func() {
+		if p := recover(); p == nil {
+			t.Fatalf("expected SetData() to panic but it didn't")
+		}
+	}()
+	ev.GetPeer().SetData(make([]byte, enet.MaxPeerDataLength+1))
 }
 
 func assertPeerData(t testing.TB, peer enet.Peer, expected []byte, msg string) {

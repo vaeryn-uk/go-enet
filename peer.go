@@ -19,19 +19,18 @@ type Peer interface {
 	SendString(str string, channel uint8, flags PacketFlags) error
 	SendPacket(packet Packet, channel uint8) error
 
-	// SetData set an arbitrary values against a peer. This is useful
-	// to attach some application-specific data against each peer (such as
-	// an identifier).
+	// SetData sets an arbitrary value against a peer. This is useful to attach some
+	// application-specific data for future use, such as an identifier.
 	//
 	// http://enet.bespin.org/structENetPeer.html#a1873959810db7ac7a02da90469ee384e
 	//
-	// For simplicity, we only allow byte slices up to 255 length. If given a slice
-	// longer than this, we panic. See MaxPeerDataLength.
+	// For simplicity of implementation, this only allows byte slices up to 255
+	// length. If given a slice longer than this, a panic is raised. See
+	// MaxPeerDataLength.
 	SetData(data []byte)
 
 	// GetData returns an application-specific value that's been set
-	// against this peer. The bool is true if a value has previously been
-	// set.
+	// against this peer. This returns nil if no data has been set.
 	//
 	// http://enet.bespin.org/structENetPeer.html#a1873959810db7ac7a02da90469ee384e
 	GetData() []byte
@@ -107,7 +106,7 @@ func (peer enetPeer) SetData(data []byte) {
 		return
 	}
 
-	// First byte is how long our slice is..
+	// First byte is how long our slice is.
 	b := make([]byte, len(data)+1)
 	b[0] = byte(len(data))
 	copy(b[1:], data)
@@ -122,7 +121,9 @@ func (peer enetPeer) GetData() []byte {
 	}
 
 	return C.GoBytes(
-		unsafe.Add(ptr, 1),   // Read from the [1] element.
-		C.int(*(*byte)(ptr)), // First byte contains the slice length.
+		// Skip the first byte as this is the slice length.
+		unsafe.Add(ptr, 1),
+		// Read this many bytes.
+		C.int(*(*byte)(ptr)),
 	)
 }
