@@ -3,7 +3,9 @@ package enet
 // #include <enet/enet.h>
 import "C"
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -24,9 +26,12 @@ type Peer interface {
 	//
 	// http://enet.bespin.org/structENetPeer.html#a1873959810db7ac7a02da90469ee384e
 	//
-	// For simplicity of implementation, this only allows byte slices up to 255
-	// length. If given a slice longer than this, a panic is raised. See
-	// MaxPeerDataLength.
+	// Note that due to the way the enet library works, if using this you are
+	// responsible for clearing this data when the peer is finished with.
+	// SetData(nil) will free underlying memory and avoid any leaks.
+	//
+	// See http://enet.bespin.org/Tutorial.html#ManageHost for an example of this
+	// in the underlying library.
 	SetData(data []byte)
 
 	// GetData returns an application-specific value that's been set
@@ -35,10 +40,6 @@ type Peer interface {
 	// http://enet.bespin.org/structENetPeer.html#a1873959810db7ac7a02da90469ee384e
 	GetData() []byte
 }
-
-// MaxPeerDataLength is the maximum number of bytes we can support being stored
-// alongside a peer. See Peer.SetData.
-const MaxPeerDataLength = 0xff
 
 type enetPeer struct {
 	cPeer *C.struct__ENetPeer
@@ -97,20 +98,30 @@ func (peer enetPeer) SendPacket(packet Packet, channel uint8) error {
 }
 
 func (peer enetPeer) SetData(data []byte) {
-	if len(data) > MaxPeerDataLength {
-		panic(fmt.Sprintf("cannot store data with len > %d", MaxPeerDataLength))
+	if len(data) > math.MaxUint32 {
+		panic(fmt.Sprintf("maximum peer data length is uint32 (%d)", math.MaxUint32))
 	}
 
+	// Free any data that was previously stored against this peer.
+	existing := unsafe.Pointer(peer.cPeer.data)
+	if existing != nil {
+		C.free(existing)
+	}
+
+	// If nil, set this explicitly.
 	if data == nil {
 		peer.cPeer.data = nil
 		return
 	}
 
-	// First byte is how long our slice is.
-	b := make([]byte, len(data)+1)
-	b[0] = byte(len(data))
-	copy(b[1:], data)
-	peer.cPeer.data = unsafe.Pointer(&b[0])
+	// First 4 bytes stores how many bytes we have. This is so we can C.GoBytes when
+	// retrieving which requires a byte length to read.
+	b := make([]byte, len(data)+4)
+	binary.LittleEndian.PutUint32(b, uint32(len(data)))
+	// Join this header + data in to a contiguous slice
+	copy(b[4:], data)
+	// And write it out to C memory, storing our pointer.
+	peer.cPeer.data = unsafe.Pointer(C.CBytes(b))
 }
 
 func (peer enetPeer) GetData() []byte {
@@ -120,10 +131,18 @@ func (peer enetPeer) GetData() []byte {
 		return nil
 	}
 
-	return C.GoBytes(
-		// Skip the first byte as this is the slice length.
-		unsafe.Add(ptr, 1),
-		// Read this many bytes.
-		C.int(*(*byte)(ptr)),
-	)
+	// First 4 bytes are the bytes length.
+	header := []byte{
+		*(*byte)(unsafe.Add(ptr, 0)),
+		*(*byte)(unsafe.Add(ptr, 1)),
+		*(*byte)(unsafe.Add(ptr, 2)),
+		*(*byte)(unsafe.Add(ptr, 3)),
+	}
+
+	return []byte(C.GoBytes(
+		// Take from the start of the data.
+		unsafe.Add(ptr, 4),
+		// As many bytes as were indicated in the header.
+		C.int(binary.LittleEndian.Uint32(header)),
+	))
 }

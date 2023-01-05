@@ -46,21 +46,11 @@ func TestPeerData(t *testing.T) {
 	ev.GetPeer().SetData([]byte{1, 2, 3})
 	runtime.GC()
 	assertPeerData(t, ev.GetPeer(), []byte{1, 2, 3}, "after GC")
-
-	// Maximum length.
-	ev.GetPeer().SetData(make([]byte, 0xff))
-	assertPeerData(t, ev.GetPeer(), make([]byte, 0xff), "max length")
-
-	// Finally check that anything longer than max panics.
-	defer func() {
-		if p := recover(); p == nil {
-			t.Fatalf("expected SetData() to panic but it didn't")
-		}
-	}()
-	ev.GetPeer().SetData(make([]byte, enet.MaxPeerDataLength+1))
 }
 
 func assertPeerData(t testing.TB, peer enet.Peer, expected []byte, msg string) {
+	t.Helper()
+
 	actual := peer.GetData()
 
 	if (actual == nil) != (expected == nil) {
