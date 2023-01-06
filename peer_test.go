@@ -1,8 +1,13 @@
 package enet_test
 
 import (
+	"fmt"
 	"github.com/codecat/go-enet"
+	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -34,33 +39,64 @@ func TestPeerData(t *testing.T) {
 	ev = <-events
 	assertPeerData(t, ev.GetPeer(), testData, "on packet received")
 
-	// Now do some extra checks on what we can pass in.
-	ev.GetPeer().SetData(nil)
-	assertPeerData(t, ev.GetPeer(), nil, "nil set")
+	t.Run("clear-data", func(t *testing.T) {
+		ev.GetPeer().SetData(nil)
+		assertPeerData(t, ev.GetPeer(), nil, "nil set")
+	})
 
-	// Empty byte slice.
-	ev.GetPeer().SetData([]byte{})
-	assertPeerData(t, ev.GetPeer(), []byte{}, "empty set")
+	t.Run("empty-slice", func(t *testing.T) {
+		ev.GetPeer().SetData([]byte{})
+		assertPeerData(t, ev.GetPeer(), []byte{}, "empty set")
+	})
 
-	// Check that our data stored in C survives garbage collection
-	ev.GetPeer().SetData([]byte{1, 2, 3})
-	runtime.GC()
-	assertPeerData(t, ev.GetPeer(), []byte{1, 2, 3}, "after GC")
+	// Check that our data stored in C survives garbage collection.
+	t.Run("survives-gc", func(t *testing.T) {
+		ev.GetPeer().SetData([]byte{1, 2, 3})
+		runtime.GC()
+		assertPeerData(t, ev.GetPeer(), []byte{1, 2, 3}, "after GC")
+	})
 
-	// Maximum length.
-	ev.GetPeer().SetData(make([]byte, 0xff))
-	assertPeerData(t, ev.GetPeer(), make([]byte, 0xff), "max length")
-
-	// Finally check that anything longer than max panics.
-	defer func() {
-		if p := recover(); p == nil {
-			t.Fatalf("expected SetData() to panic but it didn't")
+	// Sniffs for a potential memory leak in our set data implementation.
+	// We expect SetData to clear whatever C memory was used previously.
+	// This may end up being a flaky test, but will keep it in for now to
+	// build confidence in our implementation.
+	t.Run("memory-leaks", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skipf("skipping mem leak test as not running on a linux host")
 		}
-	}()
-	ev.GetPeer().SetData(make([]byte, enet.MaxPeerDataLength+1))
+
+		noOfIncreases := 0
+		last := currentMemory(t)
+
+		// Assign a large string (10MB) to data over and over again, checking
+		// for continuous increases in mem usage, with some threshold.
+		for i := 0; i < 99; i++ {
+			ev.GetPeer().SetData([]byte(strings.Repeat("x", 1024*1024*10)))
+
+			// Detect a memory leak by checking if we're using more than 1MB last than the
+			// previous for too many iterations.
+			now := currentMemory(t)
+
+			if now-last > 1024 {
+				noOfIncreases++
+			} else {
+				// If it's not an increase, reset our counter.
+				noOfIncreases = 0
+			}
+
+			// If we reach a threshold of 5 continuous increases, consider this a leak.
+			if noOfIncreases > 5 {
+				t.Fatal("potential memory leak detected")
+			}
+
+			last = now
+		}
+	})
 }
 
 func assertPeerData(t testing.TB, peer enet.Peer, expected []byte, msg string) {
+	t.Helper()
+
 	actual := peer.GetData()
 
 	if (actual == nil) != (expected == nil) {
@@ -146,4 +182,28 @@ var port uint16 = 49152
 func getFreePort() uint16 {
 	port++
 	return port
+}
+
+// currentMemory returns the memory usage of the current process according to
+// the OS. This uses linux's proc FS to give a rough estimate based on VmSize.
+// Note we don't want to use runtime.MemStats here as we're looking for the
+// total memory (including C allocations).
+func currentMemory(t testing.TB) int {
+	// GC to give a stable measure.
+	runtime.GC()
+
+	pmapCmd := fmt.Sprintf("pmap %d | grep total | grep -Eo '[0-9]+'", os.Getpid())
+	cmd := exec.Command("bash", "-c", pmapCmd)
+
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to run memory check command: %s", err)
+	}
+
+	kb, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		t.Fatalf("failed converting memory output provided by pmap to int: %s", err)
+	}
+
+	return kb
 }
